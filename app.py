@@ -1250,3 +1250,159 @@ with gr.Blocks() as demo:
                 )
                 with gr.Row():
                     clear_btn = gr.Button("Clear Selection", variant="secondary")
+                    
+                    
+                    
+
+    # Page 2: Results Dashboard
+    with gr.Column(visible=False) as page_results:
+        gr.HTML("""
+        <button onclick="document.querySelector('#hidden-back-btn').click()"
+          style="
+            position: fixed !important;
+            top: 30px !important;
+            left: 30px !important;
+            z-index: 9999 !important;
+            width: 48px !important;
+            height: 48px !important;
+            border-radius: 50% !important;
+            background: #0f172a !important;
+            color: #ffffff !important;
+            border: none !important;
+            font-size: 22px !important;
+            font-weight: 900 !important;
+            cursor: pointer !important;
+            box-shadow: 0 4px 16px rgba(15,23,42,0.35) !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            transition: all 0.2s ease !important;
+            line-height: 1 !important;
+          "
+          onmouseover="this.style.transform='scale(1.12)'; this.style.background='#1e293b';"
+          onmouseout="this.style.transform='scale(1)'; this.style.background='#0f172a';"
+          title="Back to Configuration"
+        >&#8592;</button>
+        """)
+        back_btn = gr.Button("← Back", variant="secondary", elem_id="hidden-back-btn")
+            
+        # Dashboard results layout
+        with gr.Tabs() as main_tabs:
+            # Tab 1: Patient-specific diagnostics
+            with gr.Tab("Detailed Diagnostic Report", id=0):
+                # Dropdown for selecting processed images
+                with gr.Row(elem_classes="center-row"):
+                    with gr.Column(scale=1):
+                        pass
+                    with gr.Column(scale=3, elem_classes="dropdown-col"):
+                        gr.HTML("<div class='dropdown-label-custom'>Select Patient Image</div>")
+                        image_selector = gr.Dropdown(
+                            show_label=False,
+                            choices=[],
+                            interactive=True,
+                            elem_id="inspect-dropdown",
+                            container=False
+                        )
+                    with gr.Column(scale=1):
+                        pass
+                
+                with gr.Row():
+                    # Image view and download panel
+                    with gr.Column(scale=4, elem_classes="main-panel"):
+                        inspect_image = gr.Image(label="Inspected Chest X-Ray Scan", show_label=True, height=360, elem_classes="beautified-image")
+                        
+                        gr.HTML("<div style='height:16px'></div>")
+                        gr.HTML("""
+                        <div style='
+                            display: flex;
+                            align-items: center;
+                            gap: 14px;
+                            background: white;
+                            border: 1.5px solid #e2e8f0;
+                            border-radius: 14px;
+                            padding: 14px 18px;
+                            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+                            margin-bottom: 8px;
+                        '>
+                          <div style='width:38px; height:38px; border-radius:10px; background:#f0fdfa;
+                                      display:flex; align-items:center; justify-content:center; font-size:20px;
+                                      flex-shrink:0;'>📋</div>
+                          <div>
+                            <div style='font-weight:800; color:#0f172a; font-size:14px; margin-bottom:2px;'>
+                              Patient Diagnostic Report
+                            </div>
+                            <div style='color:#64748b; font-size:12px;'>
+                              Full per-patient PDF — click the file link below to download
+                            </div>
+                          </div>
+                        </div>
+                        """)
+                        patient_pdf_download = gr.File(show_label=False, visible=False, elem_id="pdf-download-file")
+                        
+                    # Consensus prediction panel
+                    with gr.Column(scale=6, elem_classes="main-panel"):
+                        gr.HTML("<h3 style='color:#0f172a; font-weight:800; margin:0 0 16px 0;'>Consensus Diagnostics & Model Outputs</h3>")
+                        
+                        ensemble_result_html = gr.HTML(
+                            "<div style='background-color:#fbf6ee; padding:15px; border-radius:8px; border:1px solid #eadbc8; text-align:center; color:#8c7e6c;'>"
+                            "<p style='margin:0; text-transform:uppercase; font-size:11px;'>Final Ensemble Decision</p>"
+                            "<h2 style='margin:10px 0;'>No Results Run Yet</h2>"
+                            "</div>"
+                        )
+                        
+                        gr.HTML("<div style='height:16px'></div>")
+                        individual_results_html = gr.HTML("Please select active parameters and click Calculate Results.")
+                        
+                        gr.HTML("<div style='height:16px'></div>")
+                        bar_chart_display = gr.Image(label="Model Confidence Comparison Chart", show_label=False)
+                        
+                        # Spacer element
+                        gr.HTML("<div style='flex-grow:1'></div>")
+                
+ 
+                        
+            # Tab 2: Cohort diagnostics overview
+            with gr.Tab("Overall Cohort Analysis", id=1):
+                with gr.Column(elem_classes="main-panel"):
+                    # Hidden cohort dataframe
+                    patient_matrix = gr.Dataframe(
+                        label="",
+                        interactive=False,
+                        wrap=True,
+                        visible=False
+                    )
+                    
+                    # Cohort diagnostics HTML preview
+                    report_display_html = gr.HTML(
+                        "<div style='background-color:#fbf6ee; padding:15px; border-radius:8px; border:1px solid #eadbc8; text-align:center; color:#8c7e6c;'>"
+                        "No cohort diagnostics run. Perform calculations to review overall report."
+                        "</div>"
+                    )
+                    
+                    gr.HTML("<div style='height:24px'></div>")
+                    gr.HTML("""
+                    <div class='dark-export-card' style='
+                        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+                        padding: 32px 24px;
+                        border-radius: 18px;
+                        text-align: center;
+                        margin-bottom: 24px;
+                        box-shadow: 0 16px 40px rgba(15,23,42,0.25);
+                        border: 1px solid rgba(255,255,255,0.08);
+                        position: relative;
+                        overflow: hidden;
+                    '>
+                        <!-- Decorative background glow -->
+                        <div style='position:absolute; top:-50%; left:20%; width:60%; height:200%; background:radial-gradient(circle, rgba(13,148,136,0.15) 0%, transparent 70%); pointer-events:none;'></div>
+                        
+                        <div style='position:relative; z-index:2; width: 60px; height: 60px; background: rgba(13,148,136,0.15); border: 1px solid rgba(20,184,166,0.3); border-radius: 16px; display: flex; align-items: center; justify-content: center; margin: 0 auto 18px auto; box-shadow: 0 0 20px rgba(20,184,166,0.3); color: #2dd4bf;'>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 0 8px rgba(45,212,191,0.5));"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        </div>
+                        <h4 style='position:relative; z-index:2; margin:0; color:#f8fafc; font-weight:900; font-size:1.6rem; letter-spacing:0.5px; text-shadow: 0 2px 4px rgba(0,0,0,0.5);'>Export Cohort Diagnostics</h4>
+                        <p style='position:relative; z-index:2; margin:10px 0 0 0; color:#94a3b8; font-size:1.05rem; font-weight:500;'>Securely download comprehensive CSV, HTML, and PDF reports for all processed images</p>
+                    </div>
+                    """)
+                    with gr.Row(elem_classes="download-card-row"):
+                        csv_download = gr.File(label="📊 Download CSV Cohort Diagnostics", visible=False)
+                        html_download = gr.File(label="🌐 Download HTML Cohort Report", visible=False)
+                        pdf_download = gr.File(label="📑 Download PDF Cohort Report", visible=False)
