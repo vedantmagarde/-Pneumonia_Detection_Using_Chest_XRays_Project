@@ -1,4 +1,5 @@
 import os
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 import cv2
 import hashlib
 import shutil
@@ -35,10 +36,10 @@ os.makedirs("samples", exist_ok=True)
 # 1. Model Configuration (12 Models)
 MODEL_PATHS = {
     "Xception (Contrast, Medium)":
-        r"C:\CODES__SSD512\Pneumonia Project\Models\E27_CLAHE_Contrast_Xception_P4I3A3M7T4.keras",
+        r"C:\CODES__SSD512\Pneumonia Project\Models\E27_CLAHE_Contrast_Xception_P4I3A3M7T4.h5",
 
     "Xception (Contrast, Light)":
-        r"C:\CODES__SSD512\Pneumonia Project\Models\E23_CLAHE_Contrast_Xception_P4I3A2M7T4.keras",
+        r"C:\CODES__SSD512\Pneumonia Project\Models\E23_CLAHE_Contrast_Xception_P4I3A2M7T4.h5",
 
     "ImprovedCNN (Medium)":
         r"C:\CODES__SSD512\Pneumonia Project\Models\E5_ImprovedCNN_P1I1A3M2T2.h5",
@@ -47,10 +48,10 @@ MODEL_PATHS = {
         r"C:\CODES__SSD512\Pneumonia Project\Models\E9_MobileNetV2_P1I3A2M3T3.h5",
 
     "ResNet50 (Contrast, Medium)":
-        r"C:\CODES__SSD512\Pneumonia Project\Models\E26_CLAHE_Contrast_ResNet50_P4I3A3M6T4.keras",
+        r"C:\CODES__SSD512\Pneumonia Project\Models\E26_CLAHE_Contrast_ResNet50_P4I3A3M6T4.h5",
 
     "Xception (Base)":
-        r"C:\CODES__SSD512\Pneumonia Project\Models\E21_Xception_P1I3A2M7T3.keras",
+        r"C:\CODES__SSD512\Pneumonia Project\Models\E21_Xception_P1I3A2M7T3.h5",
 
     "ImprovedCNN (Light)":
         r"C:\CODES__SSD512\Pneumonia Project\Models\E4_ImprovedCNN_P1I1A2M2T1.h5",
@@ -62,42 +63,138 @@ MODEL_PATHS = {
         r"C:\CODES__SSD512\Pneumonia Project\Models\E10_CLAHE_MobileNetV2_P2I3A2M3T3.h5",
 
     "ResNet50 (Contrast, Light)":
-        r"C:\CODES__SSD512\Pneumonia Project\Models\E20_CLAHE_Contrast_ResNet50_P4I3A2M6T4.keras",
+        r"C:\CODES__SSD512\Pneumonia Project\Models\E20_CLAHE_Contrast_ResNet50_P4I3A2M6T4.h5",
 
     "ImprovedCNN (Contrast)":
         r"C:\CODES__SSD512\Pneumonia Project\Models\E7_CLAHE_Contrast_ImprovedCNN_P4I1A2M2T2.h5",
 
     "DenseNet121 (Contrast, Medium)":
-        r"C:\CODES__SSD512\Pneumonia Project\Models\E25_CLAHE_Contrast_DenseNet121_P4I3A3M5T4.keras"
+        r"C:\CODES__SSD512\Pneumonia Project\Models\E25_CLAHE_Contrast_DenseNet121_P4I3A3M5T4.h5"
 }
 
 loaded_models = {}
 
-# DepthwiseConv2D compatibility layer for TF 2.10
+# --- TF 2.10/3.0 COMPATIBILITY LAYERS & LOADERS ---
 class LegacyDepthwiseConv2D(tf.keras.layers.DepthwiseConv2D):
     @classmethod
     def from_config(cls, config):
         config.pop('groups', None)
+        config.pop('kernel_initializer', None)
+        config.pop('kernel_regularizer', None)
+        config.pop('kernel_constraint', None)
         return super().from_config(config)
+
+class LegacySeparableConv2D(tf.keras.layers.SeparableConv2D):
+    @classmethod
+    def from_config(cls, config):
+        config.pop('groups', None)
+        config.pop('kernel_initializer', None)
+        config.pop('kernel_regularizer', None)
+        config.pop('kernel_constraint', None)
+        return super().from_config(config)
+
+def load_legacy_model(path):
+    import json
+    import h5py
+    
+    custom_objs = {
+        'DepthwiseConv2D': LegacyDepthwiseConv2D,
+        'SeparableConv2D': LegacySeparableConv2D,
+        'Functional': tf.keras.Model,
+        'Sequential': tf.keras.Sequential
+    }
+    
+    try:
+        # Load from patched config to avoid node index mismatch and / name validation failures in Keras 3
+        with h5py.File(path, 'r') as f:
+            config_str = f.attrs.get('model_config')
+            if config_str:
+                if isinstance(config_str, bytes):
+                    config_str = config_str.decode('utf-8')
+                config = json.loads(config_str)
+                
+                # Recursively patch connections and names in layers config
+                def patch_config(obj):
+                    if isinstance(obj, dict):
+                        new_dict = {}
+                        for k, v in obj.items():
+                            if k == 'name' and isinstance(v, str):
+                                v = v.replace('/', '_')
+                            elif k == 'inbound_nodes':
+                                new_nodes = []
+                                for node in v:
+                                    new_node = []
+                                    for conn in node:
+                                        new_conn = list(conn)
+                                        if len(new_conn) >= 1 and isinstance(new_conn[0], str):
+                                            new_conn[0] = new_conn[0].replace('/', '_')
+                                        if len(new_conn) >= 2 and new_conn[1] == 1:
+                                            new_conn[1] = 0
+                                        new_node.append(new_conn)
+                                    new_nodes.append(new_node)
+                                v = new_nodes
+                            elif k in ['input_layers', 'output_layers']:
+                                new_layers = []
+                                for item in v:
+                                    new_item = list(item)
+                                    if len(new_item) >= 1 and isinstance(new_item[0], str):
+                                        new_item[0] = new_item[0].replace('/', '_')
+                                    new_layers.append(new_item)
+                                v = new_layers
+                            else:
+                                v = patch_config(v)
+                            new_dict[k] = v
+                        return new_dict
+                    elif isinstance(obj, list):
+                        return [patch_config(x) for x in obj]
+                    else:
+                        return obj
+
+                patched_config = patch_config(config)
+                patched_config_str = json.dumps(patched_config)
+                
+                model = tf.keras.models.model_from_json(
+                    patched_config_str,
+                    custom_objects=custom_objs
+                )
+                model.load_weights(path)
+                return model
+    except Exception as e:
+        print(f"Patched JSON load failed, falling back to standard load_model. Error: {e}")
+        
+    return tf.keras.models.load_model(
+        path,
+        custom_objects=custom_objs,
+        compile=False
+    )
+# --------------------------------------------------
+
+import time # Add this at the top of your script if it isn't there!
 
 print("Initializing models...")
 for name, path in MODEL_PATHS.items():
     if os.path.exists(path):
         try:
-            print(f"Loading actual model {name} from {path}...")
-            # Pass custom class for backward compatibility
-            loaded_models[name] = tf.keras.models.load_model(
-                path, 
-                custom_objects={'DepthwiseConv2D': LegacyDepthwiseConv2D},
-                compile=False
-            )
-            print(f"Successfully loaded actual model {name}.")
+            # print(f"[{time.strftime('%H:%M:%S')}] Attempting to load: {name}...")
+            # print(f"Path: {path}")
+            
+            # Record start time to measure how long it takes
+            start_time = time.time()
+            
+            # Load the legacy model using our robust compatibility loader
+            loaded_models[name] = load_legacy_model(path)
+            
+            elapsed = time.time() - start_time
+            # print(f"[{time.strftime('%H:%M:%S')}] Successfully loaded {name} in {elapsed:.2f} seconds.\n")
+            
         except Exception as e:
-            print(f"Failed to load model {name} (Error: {e}). Running in Simulation Mode.")
+            # print(f"[{time.strftime('%H:%M:%S')}] FAILED to load {name}. Error: {e}\n")
             loaded_models[name] = None
     else:
-        print(f"Model path {path} not found. Running in Simulation Mode.")
+        print(f"[{time.strftime('%H:%M:%S')}] MISSING FILE: {path}\n")
         loaded_models[name] = None
+
+# print("Model initialization loop complete!")
         
 # 2. Image Preprocessing & Sample Setup
 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -484,6 +581,22 @@ def generate_html_report(all_results, selected_models):
         row_tds += f"<td style='{ensemble_style}'>{ensemble_cls} ({r['results']['Ensemble']['confidence']:.1f}%)</td>"
         table_rows += f"<tr>{row_tds}</tr>"
 
+    badge_html_list = []
+    for m in selected_models:
+        if "Xception" in m:
+            bg = "#e0f2fe"; border = "#bae6fd"; text = "#0369a1"
+        elif "ResNet" in m:
+            bg = "#e0e7ff"; border = "#c7d2fe"; text = "#4338ca"
+        elif "DenseNet" in m:
+            bg = "#f3e8ff"; border = "#e9d5ff"; text = "#6b21a8"
+        elif "MobileNet" in m:
+            bg = "#fffbeb"; border = "#fef3c7"; text = "#b45309"
+        else:
+            bg = "#ecfdf5"; border = "#d1fae5"; text = "#047857"
+        badge = f'<span style="display: inline-block; background-color: {bg}; border: 1.5px solid {border}; color: {text}; font-size: 11.5px; font-weight: 800; padding: 4px 12px; border-radius: 30px; margin: 4px 6px 4px 0px; box-shadow: 0 2px 5px rgba(0,0,0,0.06); letter-spacing: 0.2px;">{m}</span>'
+        badge_html_list.append(badge)
+    models_formatted = "".join(badge_html_list)
+
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -509,7 +622,7 @@ def generate_html_report(all_results, selected_models):
         <h1>Chest X-Ray Diagnostics Report</h1>
         <div class="metadata">
             <p><strong>Report Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-            <p><strong>Selected Models:</strong> {', '.join(selected_models)}</p>
+            <p><strong>Selected Models:</strong> {models_formatted}</p>
         </div>
         <div class="summary-box">
             <div class="metric">
@@ -538,7 +651,6 @@ def generate_html_report(all_results, selected_models):
     </body>
     </html>
     """
-    import tempfile, os
     html_path = os.path.join(tempfile.gettempdir(), "Pneumonia_Cohort_Report.html")
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(html_content)
@@ -551,49 +663,104 @@ def create_single_patient_fig(p_data, bar_chart_img):
     fig = plt.figure(figsize=(8.5, 11))
     fig.patch.set_facecolor('#ffffff')
     
-    # Render report header
-    fig.text(0.5, 0.92, "PNEUMONIA AI DIAGNOSTIC REPORT", ha='center', fontsize=24, weight='bold', color='#0f172a')
-    fig.text(0.5, 0.89, f"Patient Scan: {p_data['name']}", ha='center', fontsize=14, color='#64748b')
+    # 1. Top Header Banner
+    ax_header = fig.add_axes([0, 0.90, 1, 0.10])
+    ax_header.set_facecolor('#0f172a') # Premium dark slate background
+    ax_header.set_xticks([])
+    ax_header.set_yticks([])
+    for spine in ax_header.spines.values():
+        spine.set_visible(False)
+    ax_header.text(0.05, 0.5, "PNEUMONIA AI DIAGNOSTIC REPORT", va='center', ha='left', fontsize=15, weight='black', color='#ffffff')
+    ax_header.text(0.95, 0.5, "CLINICAL SCAN ANALYSIS", va='center', ha='right', fontsize=9, weight='bold', color='#38bdf8')
     
-    # Draw header divider
-    fig.add_axes([0.15, 0.86, 0.7, 0.001]).plot([0, 1], [0, 0], color='#cbd5e1', lw=1.5)
-    fig.axes[-1].axis('off')
+    # Header Accent Line
+    ax_sep = fig.add_axes([0, 0.895, 1, 0.005])
+    ax_sep.set_facecolor('#0ea5e9') # Sky blue accent line
+    ax_sep.set_xticks([])
+    ax_sep.set_yticks([])
+    for spine in ax_sep.spines.values():
+        spine.set_visible(False)
+        
+    # 2. Structured Metadata Card Block
+    ax_meta = fig.add_axes([0.10, 0.80, 0.80, 0.07])
+    ax_meta.axis('off')
+    ax_meta.set_xlim(0, 1)
+    ax_meta.set_ylim(0, 1)
     
-    # Render patient scan image
-    ax_img = fig.add_axes([0.15, 0.49, 0.7, 0.35])
+    from matplotlib.patches import FancyBboxPatch
+    card = FancyBboxPatch(
+        (0.005, 0.05), 0.99, 0.90,
+        boxstyle="round,pad=0.0,rounding_size=0.1",
+        linewidth=1, edgecolor='#e2e8f0', facecolor='#f8fafc',
+        transform=ax_meta.transData
+    )
+    ax_meta.add_patch(card)
+    
+    # Format and truncate long filenames to prevent overlapping
+    filename_str = p_data['name']
+    if len(filename_str) > 32:
+        name_part, ext_part = os.path.splitext(filename_str)
+        avail_len = 32 - len(ext_part) - 3
+        if avail_len > 6:
+            prefix = name_part[:avail_len // 2 + 1]
+            suffix = name_part[-(avail_len - len(prefix)):]
+            filename_str = f"{prefix}...{suffix}{ext_part}"
+        else:
+            filename_str = filename_str[:29] + "..."
+
+    ax_meta.text(0.04, 0.65, "PATIENT SCAN FILE", fontsize=8, weight='bold', color='#64748b')
+    ax_meta.text(0.04, 0.30, filename_str, fontsize=10, weight='bold', color='#1e293b')
+    
+    ax_meta.text(0.52, 0.65, "ANALYSIS TIMESTAMP", fontsize=8, weight='bold', color='#64748b')
+    ax_meta.text(0.52, 0.30, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), fontsize=10, weight='bold', color='#1e293b')
+    
+    ax_meta.text(0.80, 0.65, "SYSTEM STATUS", fontsize=8, weight='bold', color='#64748b')
+    ax_meta.text(0.80, 0.30, "COMPLETED", fontsize=10, weight='black', color='#10b981')
+    
+    # 3. Patient Scan Image with frame
+    ax_img = fig.add_axes([0.15, 0.44, 0.70, 0.32])
     img = Image.open(img_path)
     ax_img.imshow(img, cmap='gray' if img.mode == 'L' else None)
-    
-    # Configure borders around image
     ax_img.set_xticks([])
     ax_img.set_yticks([])
     for spine in ax_img.spines.values():
         spine.set_edgecolor('#cbd5e1')
-        spine.set_linewidth(2)
+        spine.set_linewidth(1.5)
+        
+    ax_img_lbl = fig.add_axes([0.15, 0.41, 0.70, 0.03])
+    ax_img_lbl.axis('off')
+    ax_img_lbl.text(0.5, 0.5, "▲ ORIGINAL CHEST X-RAY SCAN PREVIEW", ha='center', va='center', fontsize=9, color='#64748b', weight='bold')
     
-    # Render consensus section
-    ax_txt = fig.add_axes([0.15, 0.36, 0.7, 0.10])
+    # 4. Consensus Decision Badge
+    ax_txt = fig.add_axes([0.10, 0.30, 0.80, 0.09])
     ax_txt.axis('off')
     ax_txt.set_xlim(0, 1)
     ax_txt.set_ylim(0, 1)
     
     ens_class = results["Ensemble"]["class"]
     ens_conf = results["Ensemble"]["confidence"]
-    ens_color = '#b91c1c' if ens_class == "PNEUMONIA" else '#15803d'
-    ens_bg = '#f0fdf4' if ens_class == "NORMAL" else '#fef2f2'
-    ens_border = '#bbf7d0' if ens_class == "NORMAL" else '#fecdd3'
     
-    ax_txt.text(0.5, 0.8, "ENSEMBLE CONSENSUS", ha='center', fontsize=16, weight='bold', color='#475569')
+    ens_color = '#b91c1c' if ens_class == "PNEUMONIA" else '#0f766e'
+    ens_bg = '#fef2f2' if ens_class == "PNEUMONIA" else '#f0fdf4'
+    ens_border = '#fecdd3' if ens_class == "PNEUMONIA" else '#bbf7d0'
     
-    # Render final result badge
-    bbox_props = dict(boxstyle="round,pad=0.4", facecolor=ens_bg, edgecolor=ens_border, lw=2)
-    ax_txt.text(0.5, 0.2, f"  {ens_class} ({ens_conf:.2f}%)  ", ha='center', va='center', fontsize=26, weight='bold', color=ens_color, bbox=bbox_props)
+    consensus_card = FancyBboxPatch(
+        (0.005, 0.05), 0.99, 0.90,
+        boxstyle="round,pad=0.0,rounding_size=0.15",
+        linewidth=1.5, edgecolor=ens_border, facecolor=ens_bg,
+        transform=ax_txt.transData
+    )
+    ax_txt.add_patch(consensus_card)
     
+    ax_txt.text(0.5, 0.68, "ENSEMBLE CONSENSUS VOTE", va='center', ha='center', fontsize=10, weight='bold', color='#475569')
+    ax_txt.text(0.5, 0.28, f"{ens_class} ({ens_conf:.2f}%)", va='center', ha='center', fontsize=18, weight='black', color=ens_color)
+    
+    # 5. Bar Chart confidence alignment
     if bar_chart_img is not None:
-        ax_chart = fig.add_axes([0.10, 0.04, 0.8, 0.30])
+        ax_chart = fig.add_axes([0.10, 0.04, 0.80, 0.24])
         chart_img = bar_chart_img
-        # Crop top portion of the bar chart (top 15%)
         width, height = chart_img.size
+        # Crop top portion of the bar chart (top 15%)
         chart_img = chart_img.crop((0, int(height * 0.15), width, height))
         ax_chart.imshow(chart_img)
         ax_chart.axis('off')
@@ -622,31 +789,108 @@ def generate_cohort_pdf_report(all_results, selected_models):
         fig = plt.figure(figsize=(8.5, 11))
         fig.patch.set_facecolor('#ffffff')
         
-        fig.text(0.5, 0.92, "PNEUMONIA AI COHORT SUMMARY REPORT", ha='center', fontsize=24, weight='bold', color='#0f172a')
-        fig.add_axes([0.15, 0.88, 0.7, 0.001]).plot([0, 1], [0, 0], color='#cbd5e1', lw=1.5)
-        fig.axes[-1].axis('off')
+        # 1. Top Header Banner
+        ax_header = fig.add_axes([0, 0.90, 1, 0.10])
+        ax_header.set_facecolor('#0f172a') # Premium dark slate background
+        ax_header.set_xticks([])
+        ax_header.set_yticks([])
+        for spine in ax_header.spines.values():
+            spine.set_visible(False)
+        ax_header.text(0.05, 0.5, "PNEUMONIA AI COHORT SUMMARY REPORT", va='center', ha='left', fontsize=15, weight='black', color='#ffffff')
+        ax_header.text(0.95, 0.5, "BATCH RUN METRICS", va='center', ha='right', fontsize=9, weight='bold', color='#10b981')
         
+        # Header Accent Line
+        ax_sep = fig.add_axes([0, 0.895, 1, 0.005])
+        ax_sep.set_facecolor('#10b981') # Emerald green accent line for batch report
+        ax_sep.set_xticks([])
+        ax_sep.set_yticks([])
+        for spine in ax_sep.spines.values():
+            spine.set_visible(False)
+            
         normal_count = sum(1 for r in all_results if r["results"]["Ensemble"]["class"] == "NORMAL")
         pneumonia_count = sum(1 for r in all_results if r["results"]["Ensemble"]["class"] == "PNEUMONIA")
         
-        fig.text(0.15, 0.80, "COHORT OVERVIEW", fontsize=16, weight='bold', color='#475569')
-        fig.text(0.15, 0.75, f"Total Images Processed: {len(all_results)}", fontsize=14, color='#334155')
-        fig.text(0.15, 0.71, f"Normal Diagnoses: {normal_count}", fontsize=14, color='#15803d', weight='bold')
-        fig.text(0.15, 0.67, f"Pneumonia Diagnoses: {pneumonia_count}", fontsize=14, color='#b91c1c', weight='bold')
+        # 2. Left Column: Metrics Overview Card
+        ax_overview = fig.add_axes([0.08, 0.50, 0.40, 0.36])
+        ax_overview.axis('off')
+        ax_overview.set_xlim(0, 1)
+        ax_overview.set_ylim(0, 1)
         
-        fig.text(0.15, 0.58, "SELECTED ENSEMBLE MODELS", fontsize=14, weight='bold', color='#475569')
-        y_pos = 0.54
-        for m in selected_models:
-            fig.text(0.15, y_pos, f"• {m}", fontsize=12, color='#64748b')
-            y_pos -= 0.03
-            
-        # Render pie chart
+        from matplotlib.patches import FancyBboxPatch
+        card_overview = FancyBboxPatch(
+            (0.005, 0.02), 0.995, 0.96,
+            boxstyle="round,pad=0.0,rounding_size=0.08",
+            linewidth=1, edgecolor='#e2e8f0', facecolor='#f8fafc',
+            transform=ax_overview.transData
+        )
+        ax_overview.add_patch(card_overview)
+        
+        ax_overview.text(0.08, 0.88, "COHORT OVERVIEW", fontsize=12, weight='black', color='#1e293b')
+        ax_overview.plot([0.08, 0.92], [0.83, 0.83], color='#cbd5e1', lw=1.0)
+        
+        ax_overview.text(0.08, 0.70, "Total Scans Processed", fontsize=9, weight='bold', color='#64748b')
+        ax_overview.text(0.08, 0.58, f"{len(all_results)}", fontsize=18, weight='black', color='#0f172a')
+        
+        ax_overview.text(0.08, 0.44, "Normal Diagnoses", fontsize=9, weight='bold', color='#64748b')
+        ax_overview.text(0.08, 0.32, f"{normal_count}", fontsize=18, weight='black', color='#0f766e')
+        
+        ax_overview.text(0.08, 0.18, "Pneumonia Diagnoses", fontsize=9, weight='bold', color='#64748b')
+        ax_overview.text(0.08, 0.06, f"{pneumonia_count}", fontsize=18, weight='black', color='#be123c')
+        
+        # 3. Right Column: Diagnosis Distribution Card (Pie Chart)
+        ax_pie_card = fig.add_axes([0.52, 0.50, 0.40, 0.36])
+        ax_pie_card.axis('off')
+        ax_pie_card.set_xlim(0, 1)
+        ax_pie_card.set_ylim(0, 1)
+        
+        card_pie = FancyBboxPatch(
+            (0.005, 0.02), 0.995, 0.96,
+            boxstyle="round,pad=0.0,rounding_size=0.08",
+            linewidth=1, edgecolor='#e2e8f0', facecolor='#ffffff',
+            transform=ax_pie_card.transData
+        )
+        ax_pie_card.add_patch(card_pie)
+        
         pie_img = make_pie_chart(all_results)
         if pie_img is not None:
-            ax_pie = fig.add_axes([0.45, 0.55, 0.45, 0.30])
+            ax_pie = fig.add_axes([0.54, 0.52, 0.36, 0.32])
             ax_pie.imshow(pie_img)
             ax_pie.axis('off')
             
+        # 4. Bottom Row: Selected Models Card
+        ax_models_card = fig.add_axes([0.08, 0.10, 0.84, 0.36])
+        ax_models_card.axis('off')
+        ax_models_card.set_xlim(0, 1)
+        ax_models_card.set_ylim(0, 1)
+        
+        card_models = FancyBboxPatch(
+            (0.002, 0.02), 0.996, 0.96,
+            boxstyle="round,pad=0.0,rounding_size=0.06",
+            linewidth=1, edgecolor='#e2e8f0', facecolor='#f8fafc',
+            transform=ax_models_card.transData
+        )
+        ax_models_card.add_patch(card_models)
+        
+        ax_models_card.text(0.04, 0.88, "SELECTED ENSEMBLE MODELS CONFIGURATION", fontsize=11, weight='black', color='#1e293b')
+        ax_models_card.plot([0.04, 0.96], [0.82, 0.82], color='#cbd5e1', lw=1.0)
+        
+        num_models = len(selected_models)
+        for i, m in enumerate(selected_models):
+            if num_models <= 6:
+                col = 0
+                row = i
+                x_pos = 0.06
+                y_pos = 0.68 - row * 0.11
+            else:
+                col = i % 2
+                row = i // 2
+                x_pos = 0.06 if col == 0 else 0.52
+                y_pos = 0.68 - row * 0.11
+                
+            ax_models_card.text(x_pos, y_pos, "✔", color='#10b981', weight='bold', fontsize=11)
+            ax_models_card.text(x_pos + 0.04, y_pos, m, fontsize=10.5, color='#334155', weight='bold')
+            
+        # Footer
         fig.text(0.5, 0.02, f"Report automatically generated by Pneumonia AI Diagnostic Dashboard • {datetime.now().strftime('%Y-%m-%d %H:%M')}", ha='center', fontsize=9, color='#94a3b8')
         
         pdf.savefig(fig)
@@ -853,31 +1097,261 @@ footer { display: none !important; }
     box-shadow: 0 0 0 3px rgba(13,148,136,0.1) !important;
 }
 
-/* File download cards styling */
+/* File download container row spacing */
+.download-card-row {
+    gap: 24px !important;
+}
+
+/* Base download card styling */
 .download-card-row > div {
-    border-radius: 14px !important;
-    border: 1.5px solid #e2e8f0 !important;
-    background: #ffffff !important;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.02) !important;
-    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
-    padding: 4px !important;
+    border-radius: 18px !important;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    padding: 20px 16px 16px 16px !important;
+    position: relative !important; /* For absolute badge positioning */
+    overflow: visible !important;
 }
 .download-card-row > div:hover {
-    border-color: #14b8a6 !important;
-    box-shadow: 0 12px 24px rgba(20,184,166,0.12) !important;
-    transform: translateY(-4px) !important;
+    transform: translateY(-5px) !important;
 }
+
+/* Hide Gradio default card title and replace with custom clean style */
+.download-card-row > div .block-title, 
+.download-card-row > div legend {
+    color: #0f172a !important;
+    font-size: 0.95rem !important;
+    font-weight: 850 !important;
+    margin-bottom: 14px !important;
+    letter-spacing: 0.2px !important;
+    display: block !important;
+}
+
 .download-card-row .gr-form {
     border: none !important;
     background: transparent !important;
 }
 
-/* Dark cohort export card layout */
-.dark-export-card h4 {
-    color: #f8fafc !important;
+/* --- 1. CSV Card Styles (Green/Sheets Theme) --- */
+.csv-card {
+    border: 1.5px solid rgba(16, 185, 129, 0.12) !important;
+    background: linear-gradient(135deg, #ffffff 0%, #f4fbf7 100%) !important;
+    box-shadow: 0 8px 24px rgba(16, 185, 129, 0.02) !important;
 }
-.dark-export-card p {
-    color: #94a3b8 !important;
+.csv-card:hover {
+    border-color: #10b981 !important;
+    box-shadow: 0 16px 36px rgba(16, 185, 129, 0.1) !important;
+}
+.csv-card div.file-preview,
+.csv-card .file-preview-holder,
+.csv-card [class*="file-preview"] {
+    background-color: #ecfdf5 !important;
+    border: 1.5px solid #d1fae5 !important;
+    border-radius: 12px !important;
+    padding: 10px 14px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+}
+.csv-card:hover div.file-preview,
+.csv-card:hover [class*="file-preview"] {
+    background-color: #d1fae5 !important;
+}
+.csv-card .file-name,
+.csv-card [class*="file-name"] {
+    color: #059669 !important;
+    font-weight: 700 !important;
+}
+.csv-card .file-ext,
+.csv-card [class*="file-ext"] {
+    color: #047857 !important;
+    font-weight: 800 !important;
+}
+.csv-card a.download-link,
+.csv-card .download-link,
+.csv-card [class*="download-link"] {
+    color: #ffffff !important;
+    background: linear-gradient(135deg, #34d399 0%, #059669 100%) !important;
+    padding: 6px 14px !important;
+    border-radius: 8px !important;
+    font-weight: 700 !important;
+    font-size: 0.85rem !important;
+    text-decoration: none !important;
+    box-shadow: 0 4px 10px rgba(5, 150, 105, 0.15) !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+}
+.csv-card a.download-link:hover,
+.csv-card .download-link:hover,
+.csv-card [class*="download-link"]:hover {
+    box-shadow: 0 6px 14px rgba(5, 150, 105, 0.25) !important;
+    filter: brightness(1.05) !important;
+}
+.csv-card::after {
+    content: "CSV" !important;
+    position: absolute !important;
+    top: -10px !important;
+    right: 18px !important;
+    background: #059669 !important;
+    color: #ffffff !important;
+    border: 1px solid #047857 !important;
+    padding: 3px 10px !important;
+    border-radius: 20px !important;
+    font-size: 0.72rem !important;
+    font-weight: 900 !important;
+    letter-spacing: 0.8px !important;
+    box-shadow: 0 4px 10px rgba(5, 150, 105, 0.15) !important;
+}
+
+/* --- 2. HTML Card Styles (Blue/Web Theme) --- */
+.html-card {
+    border: 1.5px solid rgba(14, 165, 233, 0.12) !important;
+    background: linear-gradient(135deg, #ffffff 0%, #f0f9ff 100%) !important;
+    box-shadow: 0 8px 24px rgba(14, 165, 233, 0.02) !important;
+}
+.html-card:hover {
+    border-color: #0ea5e9 !important;
+    box-shadow: 0 16px 36px rgba(14, 165, 233, 0.1) !important;
+}
+.html-card div.file-preview,
+.html-card .file-preview-holder,
+.html-card [class*="file-preview"] {
+    background-color: #f0f9ff !important;
+    border: 1.5px solid #e0f2fe !important;
+    border-radius: 12px !important;
+    padding: 10px 14px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+}
+.html-card:hover div.file-preview,
+.html-card:hover [class*="file-preview"] {
+    background-color: #e0f2fe !important;
+}
+.html-card .file-name,
+.html-card [class*="file-name"] {
+    color: #0284c7 !important;
+    font-weight: 700 !important;
+}
+.html-card .file-ext,
+.html-card [class*="file-ext"] {
+    color: #0369a1 !important;
+    font-weight: 800 !important;
+}
+.html-card a.download-link,
+.html-card .download-link,
+.html-card [class*="download-link"] {
+    color: #ffffff !important;
+    background: linear-gradient(135deg, #38bdf8 0%, #0284c7 100%) !important;
+    padding: 6px 14px !important;
+    border-radius: 8px !important;
+    font-weight: 700 !important;
+    font-size: 0.85rem !important;
+    text-decoration: none !important;
+    box-shadow: 0 4px 10px rgba(2, 132, 199, 0.15) !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+}
+.html-card a.download-link:hover,
+.html-card .download-link:hover,
+.html-card [class*="download-link"]:hover {
+    box-shadow: 0 6px 14px rgba(2, 132, 199, 0.25) !important;
+    filter: brightness(1.05) !important;
+}
+.html-card::after {
+    content: "HTML" !important;
+    position: absolute !important;
+    top: -10px !important;
+    right: 18px !important;
+    background: #0284c7 !important;
+    color: #ffffff !important;
+    border: 1px solid #0369a1 !important;
+    padding: 3px 10px !important;
+    border-radius: 20px !important;
+    font-size: 0.72rem !important;
+    font-weight: 900 !important;
+    letter-spacing: 0.8px !important;
+    box-shadow: 0 4px 10px rgba(2, 132, 199, 0.15) !important;
+}
+
+/* --- 3. PDF Card Styles (Red/Acrobat Theme) --- */
+.pdf-card {
+    border: 1.5px solid rgba(239, 68, 68, 0.12) !important;
+    background: linear-gradient(135deg, #ffffff 0%, #fdf2f2 100%) !important;
+    box-shadow: 0 8px 24px rgba(239, 68, 68, 0.02) !important;
+}
+.pdf-card:hover {
+    border-color: #ef4444 !important;
+    box-shadow: 0 16px 36px rgba(239, 68, 68, 0.1) !important;
+}
+.pdf-card div.file-preview,
+.pdf-card .file-preview-holder,
+.pdf-card [class*="file-preview"] {
+    background-color: #fef2f2 !important;
+    border: 1.5px solid #fee2e2 !important;
+    border-radius: 12px !important;
+    padding: 10px 14px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+}
+.pdf-card:hover div.file-preview,
+.pdf-card:hover [class*="file-preview"] {
+    background-color: #fee2e2 !important;
+}
+.pdf-card .file-name,
+.pdf-card [class*="file-name"] {
+    color: #dc2626 !important;
+    font-weight: 700 !important;
+}
+.pdf-card .file-ext,
+.pdf-card [class*="file-ext"] {
+    color: #b91c1c !important;
+    font-weight: 800 !important;
+}
+.pdf-card a.download-link,
+.pdf-card .download-link,
+.pdf-card [class*="download-link"] {
+    color: #ffffff !important;
+    background: linear-gradient(135deg, #f87171 0%, #dc2626 100%) !important;
+    padding: 6px 14px !important;
+    border-radius: 8px !important;
+    font-weight: 700 !important;
+    font-size: 0.85rem !important;
+    text-decoration: none !important;
+    box-shadow: 0 4px 10px rgba(220, 38, 38, 0.15) !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+}
+.pdf-card a.download-link:hover,
+.pdf-card .download-link:hover,
+.pdf-card [class*="download-link"]:hover {
+    box-shadow: 0 6px 14px rgba(220, 38, 38, 0.25) !important;
+    filter: brightness(1.05) !important;
+}
+.pdf-card::after {
+    content: "PDF" !important;
+    position: absolute !important;
+    top: -10px !important;
+    right: 18px !important;
+    background: #dc2626 !important;
+    color: #ffffff !important;
+    border: 1px solid #b91c1c !important;
+    padding: 3px 10px !important;
+    border-radius: 20px !important;
+    font-size: 0.72rem !important;
+    font-weight: 900 !important;
+    letter-spacing: 0.8px !important;
+    box-shadow: 0 4px 10px rgba(220, 38, 38, 0.15) !important;
+}
+
+/* Cohort export card layout */
+.export-card h4 {
+    color: #111827 !important;
+}
+.export-card p {
+    color: #4b5563 !important;
 }
 
 /* Page background gradient */
@@ -993,7 +1467,7 @@ input[type="checkbox"]:focus {
 /* Remove outline on focus */
 .sidebar-panel:focus, .sidebar-panel:focus-within,
 .main-panel:focus, .main-panel:focus-within,
-.sidebar-panel *, .main-panel * {
+.sidebar-panel *:focus, .main-panel *:focus {
     outline: none !important;
     box-shadow: none !important;
 }
@@ -1381,31 +1855,31 @@ with gr.Blocks() as demo:
                     
                     gr.HTML("<div style='height:24px'></div>")
                     gr.HTML("""
-                    <div class='dark-export-card' style='
-                        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-                        padding: 32px 24px;
-                        border-radius: 18px;
-                        text-align: center;
-                        margin-bottom: 24px;
-                        box-shadow: 0 16px 40px rgba(15,23,42,0.25);
-                        border: 1px solid rgba(255,255,255,0.08);
+                    <div class='export-card' style='
+                        background: linear-gradient(135deg, #f0fdfa 0%, #ffffff 100%) !important;
+                        padding: 32px 24px !important;
+                        border-radius: 18px !important;
+                        text-align: center !important;
+                        margin-bottom: 24px !important;
+                        box-shadow: 0 12px 32px rgba(13, 148, 136, 0.06) !important;
+                        border: 1.5px solid rgba(13, 148, 136, 0.12) !important;
                         position: relative;
                         overflow: hidden;
                     '>
                         <!-- Decorative background glow -->
-                        <div style='position:absolute; top:-50%; left:20%; width:60%; height:200%; background:radial-gradient(circle, rgba(13,148,136,0.15) 0%, transparent 70%); pointer-events:none;'></div>
+                        <div style='position:absolute; top:-50%; left:20%; width:60%; height:200%; background:radial-gradient(circle, rgba(20,184,166,0.08) 0%, transparent 70%); pointer-events:none;'></div>
                         
-                        <div style='position:relative; z-index:2; width: 60px; height: 60px; background: rgba(13,148,136,0.15); border: 1px solid rgba(20,184,166,0.3); border-radius: 16px; display: flex; align-items: center; justify-content: center; margin: 0 auto 18px auto; box-shadow: 0 0 20px rgba(20,184,166,0.3); color: #2dd4bf;'>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 0 8px rgba(45,212,191,0.5));"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        <div style='position:relative; z-index:2; width: 60px; height: 60px; background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%) !important; border: 1.5px solid rgba(13, 148, 136, 0.2) !important; border-radius: 16px !important; display: flex; align-items: center; justify-content: center; margin: 0 auto 18px auto; box-shadow: 0 6px 16px rgba(13, 148, 136, 0.25) !important; color: #ffffff !important;'>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                         </div>
-                        <h4 style='position:relative; z-index:2; margin:0; color:#f8fafc; font-weight:900; font-size:1.6rem; letter-spacing:0.5px; text-shadow: 0 2px 4px rgba(0,0,0,0.5);'>Export Cohort Diagnostics</h4>
-                        <p style='position:relative; z-index:2; margin:10px 0 0 0; color:#94a3b8; font-size:1.05rem; font-weight:500;'>Securely download comprehensive CSV, HTML, and PDF reports for all processed images</p>
+                        <h4 style='position:relative; z-index:2; margin:0; color:#111827 !important; font-weight:800; font-size:1.6rem; letter-spacing:0.3px;'>Export Cohort Diagnostics</h4>
+                        <p style='position:relative; z-index:2; margin:10px 0 0 0; color:#4b5563 !important; font-size:1.05rem; font-weight:500;'>Securely download comprehensive CSV, HTML, and PDF reports for all processed images</p>
                     </div>
                     """)
                     with gr.Row(elem_classes="download-card-row"):
-                        csv_download = gr.File(label="📊 Download CSV Cohort Diagnostics", visible=False)
-                        html_download = gr.File(label="🌐 Download HTML Cohort Report", visible=False)
-                        pdf_download = gr.File(label="📑 Download PDF Cohort Report", visible=False)
+                        csv_download = gr.File(label="📊 Download CSV Cohort Diagnostics", visible=False, elem_classes=["csv-card"])
+                        html_download = gr.File(label="🌐 Download HTML Cohort Report", visible=False, elem_classes=["html-card"])
+                        pdf_download = gr.File(label="📑 Download PDF Cohort Report", visible=False, elem_classes=["pdf-card"])
 
 
 
