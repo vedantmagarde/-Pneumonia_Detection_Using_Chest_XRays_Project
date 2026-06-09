@@ -3033,4 +3033,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error doing startup cleanup of temp files: {e}")
     # demo.launch(debug=True, theme=gr.themes.Default(), css=css)
-    demo.launch(debug=True, theme=gr.themes.Default(), css=css, show_error=True)
+    demo.launch(debug=True, theme=gr.themes.Default(), css=css, show_error=True, share=True)
