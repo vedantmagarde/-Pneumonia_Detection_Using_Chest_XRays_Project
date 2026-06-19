@@ -105,7 +105,6 @@ def load_legacy_model(path):
     }
     
     try:
-        # Load from patched config to avoid node index mismatch and / name validation failures in Keras 3
         with h5py.File(path, 'r') as f:
             config_str = f.attrs.get('model_config')
             if config_str:
@@ -113,7 +112,6 @@ def load_legacy_model(path):
                     config_str = config_str.decode('utf-8')
                 config = json.loads(config_str)
                 
-                # Recursively patch connections and names in layers config
                 def patch_config(obj):
                     if isinstance(obj, dict):
                         new_dict = {}
@@ -169,13 +167,11 @@ def load_legacy_model(path):
     )
 # --------------------------------------------------
 
-import time # Add this at the top of your script if it isn't there!
-
+import time 
 import threading
 import glob
 
 def delete_file_after_delay(file_path, delay=300):
-    """Spawns a daemon thread to delete the specified file after a delay (in seconds)."""
     def delayed_delete():
         time.sleep(delay)
         try:
@@ -188,7 +184,6 @@ def delete_file_after_delay(file_path, delay=300):
     threading.Thread(target=delayed_delete, daemon=True).start()
 
 def cleanup_temp_files():
-    """Purges any leftover generated report files from the system temporary directory."""
     temp_dir = tempfile.gettempdir()
     patterns = [
         "Pneumonia_Cohort_Report_*.csv",
@@ -235,27 +230,22 @@ def setup_samples():
     
     copied = 0
     if os.path.exists(normal_dir) and os.path.exists(pneumonia_dir):
-        # Select normal scan samples
         normal_files = [f for f in os.listdir(normal_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
         for f in normal_files[:10]:
             shutil.copy(os.path.join(normal_dir, f), os.path.join("samples", f"normal_{f}"))
             copied += 1
             
-        # Select pneumonia scan samples
         pneumonia_files = [f for f in os.listdir(pneumonia_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
         for f in pneumonia_files[:10]:
             shutil.copy(os.path.join(pneumonia_dir, f), os.path.join("samples", f"pneumonia_{f}"))
             copied += 1
             
-    # Generate procedural samples if dataset is missing or incomplete
     if copied < 20:
         from PIL import Image, ImageDraw, ImageFilter
         for i in range(copied, 20):
             img = Image.new('L', (224, 224), color=25)
             draw = ImageDraw.Draw(img)
-            # Generate spine feature
             draw.rectangle([108, 10, 116, 214], fill=150)
-            # Generate rib features
             for y in range(40, 180, 16):
                 draw.arc([20, y, 100, y + 35], start=180, end=350, fill=100, width=4)
                 draw.arc([124, y, 204, y + 35], start=180, end=350, fill=100, width=4)
@@ -272,13 +262,11 @@ def predict_single(image_path, model_name):
     if model is not None:
         try:
             preprocessed = preprocess_image(image_path)
-            # NORMAL class probability (Index 0)
             pred = model.predict(preprocessed, verbose=0)[0][0]
             return float(pred)
         except Exception as e:
             print(f"Prediction failed for {model_name}: {e}. Falling back to simulation.")
             
-    # Simulation fallback with deterministic seed
     filename = os.path.basename(image_path)
     hasher = hashlib.md5((filename + model_name).encode('utf-8'))
     seed = int(hasher.hexdigest(), 16) % 10000
@@ -313,13 +301,11 @@ def run_ensemble(image_path, selected_models):
             "prob_normal": prob_normal
         }
         
-    # Compute majority consensus vote
     if votes["PNEUMONIA"] > votes["NORMAL"]:
         ensemble_class = "PNEUMONIA"
     elif votes["NORMAL"] > votes["PNEUMONIA"]:
         ensemble_class = "NORMAL"
     else:
-        # Default to PNEUMONIA in case of a tie for clinical safety
         ensemble_class = "PNEUMONIA"
         
     probs = [model_predictions[m]["prob_normal"] for m in selected_models]
@@ -334,10 +320,8 @@ def run_ensemble(image_path, selected_models):
     }
     return model_predictions
 
-
 # 4. Matplotlib Chart Generation
 def make_bar_chart(image_name, results, ax=None):
-    """Matplotlib bar chart styled for the light background theme."""
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
     import matplotlib.patheffects as pe
@@ -349,7 +333,6 @@ def make_bar_chart(image_name, results, ax=None):
     confidences = [results[m]["confidence"] for m in models]
     classes     = [results[m]["class"]      for m in models]
 
-    # Configure color palette
     normal_palette    = ['#60a5fa','#a78bfa','#f472b6','#38bdf8','#fb923c']
     pneumonia_palette = ['#fb7185','#f97316','#c084fc','#fbbf24','#a78bfa']
     n_idx = p_idx = 0
@@ -362,7 +345,6 @@ def make_bar_chart(image_name, results, ax=None):
         else:
             bar_colors.append(pneumonia_palette[p_idx % len(pneumonia_palette)]); p_idx += 1
 
-    # Initialize figure
     n = len(models)
     row_h = 0.68
     fig_h  = max(4.2, n * row_h + 2.4)
@@ -376,7 +358,6 @@ def make_bar_chart(image_name, results, ax=None):
     else:
         ax.set_facecolor('none')
 
-    # Scaled font sizes for vector mode
     title_fs = 14 if is_vector else 16
     sub_fs = 8.5 if is_vector else 9.5
     y_lbl_fs = 9.5 if is_vector else 10.5
@@ -388,7 +369,6 @@ def make_bar_chart(image_name, results, ax=None):
 
     y_pos = list(range(n))
 
-    # Draw row background cards
     for i, y in enumerate(y_pos):
         is_ens = (models[i] == "Ensemble")
         if is_ens:
@@ -407,21 +387,18 @@ def make_bar_chart(image_name, results, ax=None):
         )
         ax.add_patch(fancy)
 
-    # Draw reference threshold lines
     for xv, lc, ll in [(50,'#fca5a5','50%'), (75,'#86efac','75%')]:
         ax.axvline(xv, color=lc, linewidth=1.2,
                    linestyle='--', alpha=0.6, zorder=1)
         ax.text(xv, -0.50 if is_vector else -0.58, ll, ha='center', va='bottom',
                 fontsize=7.2, color=lc, weight='black')
 
-    # Draw horizontal bars
     for i, (y, m, conf, col, cls) in enumerate(
             zip(y_pos, models, confidences, bar_colors, classes)):
         is_ens = (m == "Ensemble")
         bh     = 0.50 if is_ens else 0.34
         radius = bh * 0.9
 
-        # Background track
         track = FancyBboxPatch(
             (0, y - bh/2), 100, bh,
             boxstyle=f"round,pad=0,rounding_size={radius}",
@@ -429,7 +406,6 @@ def make_bar_chart(image_name, results, ax=None):
         )
         ax.add_patch(track)
 
-        # Confidence value bar
         bar_w = max(conf, 2.5)
         bar = FancyBboxPatch(
             (0, y - bh/2), bar_w, bh,
@@ -440,7 +416,6 @@ def make_bar_chart(image_name, results, ax=None):
         )
         ax.add_patch(bar)
 
-        # Highlight reflection streak
         shine_h = bh * 0.22
         shine = FancyBboxPatch(
             (radius, y - bh/2 + 0.015),
@@ -451,11 +426,9 @@ def make_bar_chart(image_name, results, ax=None):
         ax.add_patch(shine)
 
         if is_ens:
-            # Diamond marker for ensemble
             ax.scatter(conf, y, s=320, marker='D', color='white',zorder=6, edgecolor=col, linewidth=2.2)
             ax.scatter(conf, y, s=100, marker='D', color=col,zorder=7)
             
-            # Text label inside bar
             ax.text(conf / 2, y,
                     f"{cls}  {conf:.1f}%",
                     ha='center', va='center',
@@ -465,10 +438,8 @@ def make_bar_chart(image_name, results, ax=None):
                         pe.withStroke(linewidth=2.5, foreground=col)
                     ])
         else:
-            # Marker at bar tip
             ax.scatter(conf, y, s=80, color='white', zorder=5,edgecolor=col, linewidth=2.5)
             
-            # Label adjacent to bar
             lbl_color = '#1e293b'
             ax.text(103, y,
                     f"{cls}  {conf:.1f}%",
@@ -476,7 +447,6 @@ def make_bar_chart(image_name, results, ax=None):
                     fontsize=lbl_fs, weight='bold',
                     color=lbl_color, zorder=5)
 
-    # Consensus final decision badge
     ens_class = results["Ensemble"]["class"]
     badge_bg = '#d1fae5' if ens_class == 'NORMAL' else '#ffe4e6'
     badge_border = '#34d399' if ens_class == 'NORMAL' else '#fecdd3'
@@ -494,27 +464,23 @@ def make_bar_chart(image_name, results, ax=None):
                             linewidth=1.3,
                             alpha=0.95))
 
-    # Configure Y-axis
     ax.set_yticks(y_pos)
     ax.set_yticklabels(models, fontsize=y_lbl_fs, color='#334155',fontweight='700')
     ax.tick_params(axis='y', length=0, pad=12)
     ax.invert_yaxis()
 
-    # Configure X-axis
     ax.set_xlim(-1, 130)
     ax.set_xticks([0, 25, 50, 75, 100])
     ax.set_xlabel("Confidence (%)", color='#94a3b8',
                   fontsize=9.5, labelpad=10)
     ax.tick_params(axis='x', colors='#cbd5e1', labelsize=8.5)
 
-    # Configure grid lines
     ax.xaxis.grid(True, color='#e2e8f0', linestyle=':',
                   linewidth=0.9, alpha=0.7, zorder=1)
     ax.yaxis.grid(False)
     for sp in ax.spines.values():
         sp.set_visible(False)
 
-    # Set title and subtitle
     short = image_name[:34] + "…" if len(image_name) > 34 else image_name
     ax.set_title("Model Confidence Comparison",
                  fontsize=title_fs, weight='black', color='#0f172a',
@@ -522,7 +488,6 @@ def make_bar_chart(image_name, results, ax=None):
     ax.text(0.5, 1.12 if is_vector else 1.065, short, transform=ax.transAxes,
             fontsize=sub_fs, color='#94a3b8', style='italic', ha='center')
 
-    # Configure legend
     legend_patches = [
         mpatches.Patch(color='#059669', label='NORMAL'),
         mpatches.Patch(color='#dc2626', label='PNEUMONIA'),
@@ -537,7 +502,6 @@ def make_bar_chart(image_name, results, ax=None):
     if is_vector:
         return None
 
-    # Save to buffer and return PIL Image
     import io
     from PIL import Image
     buf = io.BytesIO()
@@ -548,7 +512,6 @@ def make_bar_chart(image_name, results, ax=None):
     return Image.open(buf).copy()
 
 def make_pie_chart(all_results):
-    """Matplotlib pie chart styled for the light background theme."""
     ensemble_classes = [res["results"]["Ensemble"]["class"] for res in all_results]
     normal_count = ensemble_classes.count("NORMAL")
     pneumonia_count = ensemble_classes.count("PNEUMONIA")
@@ -588,14 +551,11 @@ def truncate_filename(filename, max_len=30):
     if len(filename) <= max_len:
         return filename
     name_part, ext_part = os.path.splitext(filename)
-    # Check if there is a timestamp at the end of name_part
-    # Timestamp format is _YYYYMMDD_HHMMSS (16 characters)
     timestamp_len = 16
     if len(name_part) > timestamp_len and name_part[-16] == '_' and name_part[-15:].replace('_', '').isdigit():
-        # Keep the timestamp intact
         ts_part = name_part[-16:]
         prefix_part = name_part[:-16]
-        avail_len = max_len - len(ext_part) - len(ts_part) - 3 # 3 for ...
+        avail_len = max_len - len(ext_part) - len(ts_part) - 3 
         if avail_len > 4:
             prefix = prefix_part[:avail_len // 2 + 1]
             suffix = prefix_part[-(avail_len - len(prefix)):]
@@ -603,7 +563,6 @@ def truncate_filename(filename, max_len=30):
         else:
             name_part = prefix_part[:4] + "..." + ts_part
     else:
-        # Standard middle truncation
         avail_len = max_len - len(ext_part) - 3
         if avail_len > 6:
             prefix = name_part[:avail_len // 2 + 1]
@@ -619,7 +578,6 @@ def generate_csv_report(all_results, selected_models, timestamp=None):
     csv_rows = []
     for r in all_results:
         row = {"Image": r["name"]}
-        # Populate individual model predictions
         for m in selected_models:
             row[m] = f"{r['results'][m]['class']} ({r['results'][m]['confidence']:.2f}%)"
         row["Ensemble"] = f"{r['results']['Ensemble']['class']} ({r['results']['Ensemble']['confidence']:.2f}%)"
@@ -745,7 +703,7 @@ def create_single_patient_fig(p_data, bar_chart_img=None):
     
     # 1. Top Header Banner
     ax_header = fig.add_axes([0, 0.90, 1, 0.10])
-    ax_header.set_facecolor('#0f172a') # Premium dark slate background
+    ax_header.set_facecolor('#0f172a') 
     ax_header.set_xticks([])
     ax_header.set_yticks([])
     for spine in ax_header.spines.values():
@@ -755,7 +713,7 @@ def create_single_patient_fig(p_data, bar_chart_img=None):
     
     # Header Accent Line
     ax_sep = fig.add_axes([0, 0.895, 1, 0.005])
-    ax_sep.set_facecolor('#0ea5e9') # Sky blue accent line
+    ax_sep.set_facecolor('#0ea5e9')
     ax_sep.set_xticks([])
     ax_sep.set_yticks([])
     for spine in ax_sep.spines.values():
@@ -776,7 +734,6 @@ def create_single_patient_fig(p_data, bar_chart_img=None):
     )
     ax_meta.add_patch(card)
     
-    # Format and truncate long filenames to prevent overlapping
     filename_str = p_data['name']
     if len(filename_str) > 32:
         name_part, ext_part = os.path.splitext(filename_str)
@@ -835,12 +792,11 @@ def create_single_patient_fig(p_data, bar_chart_img=None):
     ax_txt.text(0.5, 0.68, "ENSEMBLE CONSENSUS VOTE", va='center', ha='center', fontsize=10, weight='bold', color='#475569')
     ax_txt.text(0.5, 0.28, f"{ens_class} ({ens_conf:.2f}%)", va='center', ha='center', fontsize=18, weight='black', color=ens_color)
     
-    # 5. Bar Chart confidence alignment (Vector Mode preferred)
+    # 5. Bar Chart confidence alignment
     if bar_chart_img is not None and not isinstance(bar_chart_img, bool):
         ax_chart = fig.add_axes([0.10, 0.04, 0.80, 0.24])
         chart_img = bar_chart_img
         width, height = chart_img.size
-        # Crop top portion of the bar chart (top 15%)
         chart_img = chart_img.crop((0, int(height * 0.15), width, height))
         ax_chart.imshow(chart_img)
         ax_chart.axis('off')
@@ -854,11 +810,10 @@ def create_single_patient_fig(p_data, bar_chart_img=None):
     return fig
 
 def generate_single_patient_pdf(p_data, bar_chart_img=None):
-    fig = create_single_patient_fig(p_data, None) # Always use vector mode for PDF output
+    fig = create_single_patient_fig(p_data, None)
     import tempfile, os
     from datetime import datetime
     
-    # Extract clean filename base without extension
     raw_name = p_data['name']
     name_base, _ = os.path.splitext(raw_name)
     clean_base = "".join([c for c in name_base if c.isalnum() or c in '_-']).rstrip()
@@ -889,7 +844,7 @@ def generate_cohort_pdf_report(all_results, selected_models, timestamp=None):
         
         # 1. Top Header Banner
         ax_header = fig.add_axes([0, 0.90, 1, 0.10])
-        ax_header.set_facecolor('#0f172a') # Premium dark slate background
+        ax_header.set_facecolor('#0f172a') 
         ax_header.set_xticks([])
         ax_header.set_yticks([])
         for spine in ax_header.spines.values():
@@ -899,7 +854,7 @@ def generate_cohort_pdf_report(all_results, selected_models, timestamp=None):
         
         # Header Accent Line
         ax_sep = fig.add_axes([0, 0.895, 1, 0.005])
-        ax_sep.set_facecolor('#10b981') # Emerald green accent line for batch report
+        ax_sep.set_facecolor('#10b981') 
         ax_sep.set_xticks([])
         ax_sep.set_yticks([])
         for spine in ax_sep.spines.values():
@@ -949,7 +904,6 @@ def generate_cohort_pdf_report(all_results, selected_models, timestamp=None):
         )
         ax_pie_card.add_patch(card_pie)
         
-        # Draw native vector-sharp pie chart directly on ax_pie
         ensemble_classes = [res["results"]["Ensemble"]["class"] for res in all_results]
         normal_count = ensemble_classes.count("NORMAL")
         pneumonia_count = ensemble_classes.count("PNEUMONIA")
@@ -958,7 +912,6 @@ def generate_cohort_pdf_report(all_results, selected_models, timestamp=None):
         labels_f = ['NORMAL', 'PNEUMONIA']
         colors_f = ['#0d9488', '#f43f5e']
         
-        # Filter classes that have counts > 0
         active_pie = [(l, c, col) for l, c, col in zip(labels_f, counts_f, colors_f) if c > 0]
         if active_pie:
             labels_active = [x[0] for x in active_pie]
@@ -1012,7 +965,7 @@ def generate_cohort_pdf_report(all_results, selected_models, timestamp=None):
         
         # Pages 2+: Individual patient report pages
         for p_data in all_results:
-            p_fig = create_single_patient_fig(p_data, None) # Always use vector mode for PDF output
+            p_fig = create_single_patient_fig(p_data, None)
             pdf.savefig(p_fig)
             plt.close(p_fig)
             
@@ -1027,20 +980,12 @@ footer { display: none !important; }
 /* Global theme variables - STRICT LIGHT MODE OVERRIDE */
 :root, .dark, body, .gradio-container, .gradio-container.dark {
     color-scheme: light !important;
-    --background-fill-primary: #fbf6ee !important; 
-    --background-fill-secondary: #ffffff !important;
-    --body-background-fill: #fbf6ee !important;
-    --color-accent: transparent !important; 
-    --primary-500: #71a0a5 !important; 
-    --primary-600: #71a0a5 !important;
-    --border-color-primary: #eadbc8 !important; 
-    
     --body-text-color: #0f172a !important;
     --body-text-color-subdued: #64748b !important;
     --text-color: #0f172a !important;
     --text-color-subdued: #64748b !important;
     --color-text-body: #0f172a !important;
-    
+
     --body-background-fill: linear-gradient(135deg, #f0fdfa 0%, #fffdf5 100%) !important;
     --block-background-fill: #ffffff !important;
     --block-border-color: #cbd5e1 !important;
@@ -1065,21 +1010,21 @@ footer { display: none !important; }
     --table-row-text-color: #1e293b !important;
     --table-header-text-color: #0f172a !important;
     --table-header-background-fill: #f1f5f9 !important;
-    
+
     --checkbox-label-text-color: #1e293b !important;
     --checkbox-border-color: #cbd5e1 !important;
     --checkbox-background-color: #ffffff !important;
-    
+
     --button-secondary-background-fill: #f1f5f9 !important;
     --button-secondary-text-color: #1e293b !important;
     --button-secondary-border-color: #cbd5e1 !important;
-    
+
     --error-background-fill: #fef2f2 !important;
     --error-text-color: #991b1b !important;
     --error-border-color: #fecaca !important;
 
     /* Gradio Theme Colors Overrides to prevent orange accents */
-    --primary-500: #0d9488 !important;
+    --primary-500: #0d9488 !important; /* This restores the teal buttons and checkboxes */
     --accent-500: #0d9488 !important;
     --tab-border-color-active: transparent !important;
     --tab-selected-border-color: transparent !important;
@@ -1119,18 +1064,18 @@ footer { display: none !important; }
     background: var(--calc-btn-bg, linear-gradient(135deg, rgba(30, 58, 95, 0.95) 0%, rgba(18, 34, 58, 0.95) 100%)) !important;
     border: 1px solid rgba(255, 255, 255, 0.25) !important;
     border-radius: 50px !important;
-    padding: 0 24px 0 56px !important; /* Increased left padding to prevent overlap with left icon */
+    padding: 0 24px 0 56px !important; 
     min-height: 48px !important;
-    min-width: 230px !important; /* Increased width to provide breathing space for processing text */
+    min-width: 230px !important; 
     max-width: 100% !important;
-    white-space: nowrap !important; /* Prevent text wrapping */
+    white-space: nowrap !important; 
     color: white !important;
     font-weight: 700 !important;
     font-size: 14px !important;
     letter-spacing: 0.5px !important;
     text-transform: none !important;
     box-shadow: 0 6px 20px -4px rgba(13, 148, 136, 0.15), 0 4px 12px -2px rgba(0, 0, 0, 0.1), inset 0 1px 1px rgba(255, 255, 255, 0.1) !important;
-    backdrop-filter: blur(8px) !important; /* Glassmorphism border and shadow effects */
+    backdrop-filter: blur(8px) !important; 
     -webkit-backdrop-filter: blur(8px) !important;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
     position: relative !important;
@@ -1141,7 +1086,7 @@ footer { display: none !important; }
 }
 
 
-/* Left icon style - Changed stroke and fill from cyan to white for high visibility */
+/* Left icon style */
 #calc-btn::before {
     content: "";
     position: absolute !important;
@@ -1159,7 +1104,7 @@ footer { display: none !important; }
     border-right: 1px solid rgba(255, 255, 255, 0.18) !important;
 }
 
-/* Right chevron style - Changed color from cyan to white for contrast */
+/* Right chevron style */
 #calc-btn::after {
     content: "❯";
     position: absolute !important;
@@ -1212,7 +1157,7 @@ footer { display: none !important; }
     font-weight: 800 !important;
     font-size: 17.5px !important;
     padding-left: 6px !important;
-    margin: 0 0 -8px 0 !important; /* Pull closer to dropdown */
+    margin: 0 0 -8px 0 !important;
     letter-spacing: 0.2px !important;
     position: relative;
     z-index: 10;
@@ -1252,14 +1197,14 @@ footer { display: none !important; }
     border-radius: 18px !important;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
     padding: 20px 16px 16px 16px !important;
-    position: relative !important; /* For absolute badge positioning */
+    position: relative !important;
     overflow: visible !important;
 }
 .download-card-row > div:hover {
     transform: translateY(-5px) !important;
 }
 
-/* Global full-width stretching and flex stretch alignment for all cards */
+/* Global full-width stretching */
 .csv-card .wrap, .csv-card .container, .csv-card [class*="wrap"],
 .html-card .wrap, .html-card .container, .html-card [class*="wrap"],
 .pdf-card .wrap, .pdf-card .container, .pdf-card [class*="wrap"],
@@ -1294,7 +1239,7 @@ footer { display: none !important; }
     max-width: none !important;
 }
 
-/* Hide Gradio default card title and replace with custom clean style */
+/* Hide Gradio default card title */
 .download-card-row > div .block-title, 
 .download-card-row > div legend,
 #pdf-download-file .block-title,
@@ -1312,13 +1257,11 @@ footer { display: none !important; }
     background: transparent !important;
 }
 
-/* Hide clear/delete buttons inside download cards to collapse layout space */
 .csv-card button, .html-card button, .pdf-card button, #pdf-download-file button,
 .csv-card [class*="clear"], .html-card [class*="clear"], .pdf-card [class*="clear"], #pdf-download-file [class*="clear"] {
     display: none !important;
 }
 
-/* Ensure download link is aligned to the far right with no trailing margins */
 .csv-card a.download-link, .html-card a.download-link, .pdf-card a.download-link, #pdf-download-file a.download-link,
 .csv-card [class*="download-link"], .html-card [class*="download-link"], .pdf-card [class*="download-link"], #pdf-download-file [class*="download-link"] {
     margin-right: 0 !important;
@@ -2152,7 +2095,7 @@ thead th {
     padding: 0 24px 0 56px !important;
     border: 1px solid rgba(255, 255, 255, 0.25) !important;
     color: white !important;
-    text-shadow: 0 1px 3px rgba(15, 23, 42, 0.9), 0 1px 2px rgba(15, 23, 42, 0.9) !important; /* High contrast accessibility shadow */
+    text-shadow: 0 1px 3px rgba(15, 23, 42, 0.9), 0 1px 2px rgba(15, 23, 42, 0.9) !important;
 }
 
 #calc-btn:disabled::before, #calc-btn[disabled]::before {
@@ -2232,10 +2175,7 @@ custom-modal-close:hover {
     background: #fee2e2 !important;
     color: #ef4444 !important;
 }
-
-
 """
-
 
 force_light_js = """
 function() {
@@ -2257,8 +2197,6 @@ function() {
 }
 """
 
-
-
 with gr.Blocks(theme=gr.themes.Default(), css=css, js=force_light_js) as demo:
     # Application state variables
     active_selection = gr.State([])
@@ -2269,21 +2207,10 @@ with gr.Blocks(theme=gr.themes.Default(), css=css, js=force_light_js) as demo:
         <h1 style="color: #ba4343; margin: 0; font-size: 2.2rem;">Pneumonia AI Diagnostic Dashboard</h1>
         <p style="color: #8c7e6c; margin: 5px 0 0 0;">Multi-model Deep Learning Ensemble Analysis</p>
     </div>
-<img src="invalid-image-trigger" onerror='
+    <img src="invalid-image-trigger" onerror='
     (function() {
         console.log("Progress loader script initialized.");
         
-        /* --- NEW CODE: KILL DARK MODE PERMANENTLY --- */
-        document.body.classList.remove("dark");
-        document.documentElement.classList.remove("dark");
-        const themeObserver = new MutationObserver((mutations) => {
-            if (document.body.classList.contains("dark")) document.body.classList.remove("dark");
-            if (document.documentElement.classList.contains("dark")) document.documentElement.classList.remove("dark");
-        });
-        themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-        themeObserver.observe(document.body, { attributes: true, attributeFilter: ["class"] });
-        /* -------------------------------------------- */
-
         function initButtonProgress() {
             const btn = document.getElementById("calc-btn");
             if (!btn) return false;
@@ -2797,7 +2724,6 @@ with gr.Blocks(theme=gr.themes.Default(), css=css, js=force_light_js) as demo:
                         position: relative;
                         overflow: hidden;
                     '>
-                        <!-- Decorative background glow -->
                         <div style='position:absolute; top:-50%; left:20%; width:60%; height:200%; background:radial-gradient(circle, rgba(20,184,166,0.08) 0%, transparent 70%); pointer-events:none;'></div>
                         
                         <div style='position:relative; z-index:2; width: 60px; height: 60px; background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%) !important; border: 1.5px solid rgba(13, 148, 136, 0.2) !important; border-radius: 16px !important; display: flex; align-items: center; justify-content: center; margin: 0 auto 18px auto; box-shadow: 0 6px 16px rgba(13, 148, 136, 0.25) !important; color: #ffffff !important;'>
@@ -3070,18 +2996,12 @@ with gr.Blocks(theme=gr.themes.Default(), css=css, js=force_light_js) as demo:
         outputs=[inspect_image, patient_matrix, patient_pdf_download, individual_results_html, ensemble_result_html, bar_chart_display]
     )
 
-# if __name__ == "__main__":
-#     try:
-#         cleanup_temp_files()
-#     except Exception as e:
-#         print(f"Error doing startup cleanup of temp files: {e}")
-#     # demo.launch(debug=True, theme=gr.themes.Default(), css=css)
-#     demo.launch(debug=True, theme=gr.themes.Default(), css=css, show_error=True, share=True)
-
-
-
-# Update your launch command:
 if __name__ == "__main__":
+    try:
+        cleanup_temp_files()
+    except Exception as e:
+        print(f"Error during startup cleanup of temp files: {e}")
+
     demo.launch(
         server_name="0.0.0.0",
         server_port=int(os.environ.get("PORT", 7860))
