@@ -6,3 +6,18 @@ __pycache__/
 
 # Models/*.keras
 # Models/*.h5
+
+
+
+# Python bytecode cache
+__pycache__/
+
+# Temporary runtime directories
+tmp/
+.gradio/
+
+# VS Code Code Runner temporary files
+tempCodeRunnerFile.py
+
+# Machine Learning Models (Uncomment the line below if these files are large)
+# Models/
